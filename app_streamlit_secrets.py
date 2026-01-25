@@ -43,7 +43,7 @@ st.title("🤖 J.A.R.V.I.S V.1.0 DEMO")
 # Watermark in Sidebar
 st.sidebar.markdown("---")
 st.sidebar.write("💻 Developed By Shehroz Hameed")
-st.info("Made by Shehroz Hameed")
+st.info("💻 Developed By Chaury Saab")
 
 # Initialize chat history (keeps messages between refreshes)
 if "messages" not in st.session_state:
