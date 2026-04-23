@@ -2,6 +2,8 @@ import streamlit as st
 from google import genai
 import os
 import logging
+import hashlib
+from functools import lru_cache
 
 # Configure logging for server-side error tracking
 logging.basicConfig(level=logging.ERROR)
@@ -24,11 +26,28 @@ MODEL_NAME = os.getenv("GOOGLE_MODEL_NAME", "gemini-2.5-flash")
 # Maximum input length to prevent abuse
 MAX_INPUT_LENGTH = 4000
 
+# Cache TTL for responses (in seconds)
+CACHE_TTL = 3600  # 1 hour
+
 @st.cache_resource
 def get_client():
+    """Initialize and cache the Google AI client."""
     return genai.Client(api_key=GOOGLE_API_KEY)
 
 client = get_client()
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def get_ai_response(prompt_hash, full_prompt, model_name):
+    """Cache AI responses to avoid redundant API calls for identical queries."""
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=full_prompt
+        )
+        return response.text, None
+    except Exception as e:
+        logger.error(f"AI request failed: {str(e)}", exc_info=True)
+        return None, str(e)
 
 # Define different AI roles with their behaviors
 roles = {
@@ -39,6 +58,9 @@ roles = {
     "Technical Expert": "You are a technical expert. Provide detailed, accurate technical information with examples and best practices.",
     "Creative Writer": "You are a creative writer. Respond with imagination, vivid descriptions, and engaging storytelling."
 }
+
+# Pre-compute role instructions as a frozen dict for faster lookup
+ROLE_INSTRUCTIONS = {k: v for k, v in roles.items()}
 
 # Add role selection in sidebar
 selected_role = st.sidebar.selectbox("Choose AI Role:", list(roles.keys()))
@@ -78,26 +100,23 @@ if prompt := st.chat_input("Ask me anything..."):
 
     # Show loading spinner while waiting for AI response
     with st.spinner("🤔 Thinking..."):
-        try:
-            # Sanitize input to prevent prompt injection attempts
-            # Remove common prompt injection patterns
-            sanitized_prompt = prompt.replace("Ignore previous instructions", "")\
+        # Sanitize input to prevent prompt injection attempts
+        # Remove common prompt injection patterns
+        sanitized_prompt = prompt.replace("Ignore previous instructions", "")\
                                       .replace("System:", "")\
                                       .replace("You are now", "")\
                                       .replace("Override:", "")
-            
-            # Combine role instruction with user prompt using safe formatting
-            full_prompt = f"{role_instruction}\n\nUser Query: {sanitized_prompt}"
+        
+        # Combine role instruction with user prompt using safe formatting
+        full_prompt = f"{role_instruction}\n\nUser Query: {sanitized_prompt}"
+        
+        # Create a hash of the prompt for cache key
+        prompt_hash = hashlib.md5(full_prompt.encode()).hexdigest()
 
-            # Get AI response
-            response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=full_prompt
-            )
-            response_text = response.text
-        except Exception as e:
-            # Log the full error server-side for debugging
-            logger.error(f"AI request failed: {str(e)}", exc_info=True)
+        # Get AI response (with caching)
+        response_text, error = get_ai_response(prompt_hash, full_prompt, MODEL_NAME)
+        
+        if error:
             # Show generic error message to user (no stack trace exposure)
             response_text = "❌ An error occurred while processing your request. Please try again later."
 
