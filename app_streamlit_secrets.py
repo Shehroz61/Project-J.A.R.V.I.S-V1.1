@@ -1,6 +1,11 @@
 import streamlit as st
 from google import genai
 import os
+import logging
+
+# Configure logging for server-side error tracking
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
 # Get API key from Streamlit secrets, falling back to environment variable
 try:
@@ -12,6 +17,12 @@ except:
 if not GOOGLE_API_KEY:
     st.error("Google API Key not found! Please set it in Streamlit secrets or as an environment variable.")
     st.stop()
+
+# Get model name from environment variable with default fallback
+MODEL_NAME = os.getenv("GOOGLE_MODEL_NAME", "gemini-2.5-flash")
+
+# Maximum input length to prevent abuse
+MAX_INPUT_LENGTH = 4000
 
 @st.cache_resource
 def get_client():
@@ -56,6 +67,11 @@ for message in st.session_state.messages:
 
 # Get user input
 if prompt := st.chat_input("Ask me anything..."):
+    # Validate input length
+    if len(prompt) > MAX_INPUT_LENGTH:
+        st.error(f"Input too long! Maximum length is {MAX_INPUT_LENGTH} characters.")
+        st.stop()
+    
     # Show user message
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -63,18 +79,27 @@ if prompt := st.chat_input("Ask me anything..."):
     # Show loading spinner while waiting for AI response
     with st.spinner("🤔 Thinking..."):
         try:
-            # Combine role instruction with user prompt
-            full_prompt = f"{role_instruction}\n\nUser Query: {prompt}"
+            # Sanitize input to prevent prompt injection attempts
+            # Remove common prompt injection patterns
+            sanitized_prompt = prompt.replace("Ignore previous instructions", "")\
+                                      .replace("System:", "")\
+                                      .replace("You are now", "")\
+                                      .replace("Override:", "")
+            
+            # Combine role instruction with user prompt using safe formatting
+            full_prompt = f"{role_instruction}\n\nUser Query: {sanitized_prompt}"
 
             # Get AI response
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=MODEL_NAME,
                 contents=full_prompt
             )
             response_text = response.text
         except Exception as e:
-            import traceback
-            response_text = f"❌ Error: {str(e)}\n\n{traceback.format_exc()}"
+            # Log the full error server-side for debugging
+            logger.error(f"AI request failed: {str(e)}", exc_info=True)
+            # Show generic error message to user (no stack trace exposure)
+            response_text = "❌ An error occurred while processing your request. Please try again later."
 
     # Show assistant response
     with st.chat_message("assistant"):
